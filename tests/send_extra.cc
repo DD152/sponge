@@ -178,6 +178,45 @@ int main() {
                                  .with_seqno(isn + 1 + i));
             }
         }
+        
+        {
+            TCPConfig cfg;
+            WrappingInt32 isn(rd());
+            cfg.fixed_isn = isn;
+            const string nicechars = "abcdefghijklmnopqrstuvwxyz";
+            string bigstring;
+            for (unsigned int i = 0; i < TCPConfig::DEFAULT_CAPACITY; i++) {
+                bigstring.push_back(nicechars.at(rd() % nicechars.size()));
+            }
+            // max window size
+            const size_t window_size = 65535;
+            TCPSenderTestHarness test{"when multiple MAX_PAYLOAD_SIZE packets  were sent and stream is close, every "
+                                      "packet should not have FIN flag  except the last packet",
+                                      cfg};
+            test.execute(ExpectSegment{}.with_no_flags().with_syn(true).with_payload_size(0).with_seqno(isn));
+            test.execute(AckReceived{WrappingInt32{isn + 1}}.with_win(window_size));
+            test.execute(ExpectState{TCPSenderStateSummary::SYN_ACKED});
+            test.execute(WriteBytes(string(bigstring)).with_end_input(true));
+            unsigned int i = 0;
+            while ((i + TCPConfig::MAX_PAYLOAD_SIZE) < bigstring.size()) {
+                test.execute(ExpectSegment{}
+                                 .with_no_flags()
+                                 .with_payload_size(TCPConfig::MAX_PAYLOAD_SIZE)
+                                 .with_data(bigstring.substr(i, TCPConfig::MAX_PAYLOAD_SIZE))
+                                 .with_seqno(isn + 1 + i));
+                i += TCPConfig::MAX_PAYLOAD_SIZE;
+            }
+            test.execute(ExpectSegment{}
+                             .with_fin(true)
+                             .with_payload_size(bigstring.size() - i)
+                             .with_data(bigstring.substr(i, bigstring.size() - 1))
+                             .with_seqno(isn + 1 + i));
+                             test.execute(ExpectNoSegment{});
+            test.execute(ExpectState{TCPSenderStateSummary::FIN_SENT});
+            test.execute(ExpectBytesInFlight{bigstring.size() + 1});
+            test.execute(AckReceived{isn + 2 + bigstring.size()});
+            test.execute(ExpectState{TCPSenderStateSummary::FIN_ACKED});
+        }
 
         {
             TCPConfig cfg;
